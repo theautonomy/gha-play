@@ -28,9 +28,15 @@ jobs:
     - name: Build with Maven
       run: ./mvnw clean package -DskipTests=false
 
+    - name: Version JAR file
+      run: |
+        VERSION=$(echo ${{ github.sha }} | cut -c1-7)
+        mv target/demo-0.0.1-SNAPSHOT.jar target/demo-0.0.1-SNAPSHOT-${VERSION}.jar
+        echo "JAR_FILE=demo-0.0.1-SNAPSHOT-${VERSION}.jar" >> $GITHUB_ENV
+
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
-        name: spring-boot-app
-        path: target/*.jar
+        name: ${{ env.JAR_FILE }}
+        path: target/${{ env.JAR_FILE }}
         retention-days: 30
