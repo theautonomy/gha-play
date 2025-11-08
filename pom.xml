@@ -29,6 +29,15 @@
 	<properties>
 		<java.version>21</java.version>
 	</properties>
+
+	<distributionManagement>
+		<repository>
+			<id>remote-repo</id>
+			<name>Remote Maven Repository</name>
+			<url>${env.MAVEN_REPO_URL}</url>
+		</repository>
+	</distributionManagement>
+
 	<dependencies>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>

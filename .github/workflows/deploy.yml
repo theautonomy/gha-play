@@ -1,0 +1,56 @@
+name: Deploy Application
+
+on:
+  workflow_run:
+    workflows: ["Build Application"]
+    types:
+      - completed
+    branches: [ master ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download version info
+      uses: actions/download-artifact@v4
+      with:
+        name: version-info
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        run-id: ${{ github.event.workflow_run.id }}
+
+    - name: Read version info
+      id: version
+      run: |
+        source version.txt
+        echo "VERSION=${VERSION}" >> $GITHUB_ENV
+        echo "Build version: ${VERSION}"
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: 'maven'
+
+    - name: Make Maven wrapper executable
+      run: chmod +x ./mvnw
+
+    - name: Set Maven version
+      run: |
+        ./mvnw versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
+
+    - name: Deploy to Maven Repository
+      env:
+        MAVEN_REPO_URL: ${{ secrets.MAVEN_REPO_URL }}
+        MAVEN_REPO_USERNAME: ${{ secrets.MAVEN_REPO_USERNAME }}
+        MAVEN_REPO_PASSWORD: ${{ secrets.MAVEN_REPO_PASSWORD }}
+      run: |
+        ./mvnw deploy \
+          -DskipTests=true \
+          -DaltDeploymentRepository=remote-repo::default::${MAVEN_REPO_URL} \
+          -s .github/maven-settings.xml

@@ -34,12 +34,23 @@ jobs:
         POM_VERSION=$(./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout | sed 's/-SNAPSHOT//')
         BUILD_NUMBER="${{ github.run_number }}"
         JAR_NAME="demo-${BRANCH}-${POM_VERSION}-${BUILD_NUMBER}.jar"
+        VERSION="${POM_VERSION}.${BUILD_NUMBER}"
         mv target/demo-0.0.1-SNAPSHOT.jar target/${JAR_NAME}
         echo "JAR_FILE=${JAR_NAME}" >> $GITHUB_ENV
+        echo "BRANCH=${BRANCH}" >> version.txt
+        echo "VERSION=${VERSION}" >> version.txt
+        echo "BUILD_NUMBER=${BUILD_NUMBER}" >> version.txt
 
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.JAR_FILE }}
         path: target/${{ env.JAR_FILE }}
+        retention-days: 30
+
+    - name: Upload version info
+      uses: actions/upload-artifact@v4
+      with:
+        name: version-info
+        path: version.txt
         retention-days: 30
