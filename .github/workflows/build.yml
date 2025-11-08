@@ -30,9 +30,11 @@ jobs:
 
     - name: Version JAR file
       run: |
-        VERSION=$(echo ${{ github.sha }} | cut -c1-7)
-        mv target/demo-0.0.1-SNAPSHOT.jar target/demo-0.0.1-SNAPSHOT-${VERSION}.jar
-        echo "JAR_FILE=demo-0.0.1-SNAPSHOT-${VERSION}.jar" >> $GITHUB_ENV
+        VERSION="1.0.0-build.${{ github.run_number }}"
+        JAR_NAME="demo-${VERSION}.jar"
+        mv target/demo-0.0.1-SNAPSHOT.jar target/${JAR_NAME}
+        echo "JAR_FILE=${JAR_NAME}" >> $GITHUB_ENV
+        echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
