@@ -6,17 +6,24 @@ on:
     types:
       - completed
     branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to deploy (e.g., 1.0.0-SNAPSHOT)'
+        required: true
+        type: string
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
     - name: Download version info
+      if: github.event_name == 'workflow_run'
       uses: actions/download-artifact@v4
       with:
         name: version-info
@@ -26,7 +33,12 @@ jobs:
     - name: Read version info
       id: version
       run: |
-        source version.txt
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          VERSION="${{ inputs.version }}"
+        else
+          source version.txt
+          VERSION="${VERSION}"
+        fi
         echo "VERSION=${VERSION}" >> $GITHUB_ENV
         echo "Build version: ${VERSION}"
 
@@ -43,6 +55,10 @@ jobs:
     - name: Set Maven version
       run: |
         ./mvnw versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
+
+    - name: Build application
+      if: github.event_name == 'workflow_dispatch'
+      run: ./mvnw clean package -DskipTests=true
 
     - name: Deploy to Maven Repository
       env:
