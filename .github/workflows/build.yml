@@ -44,6 +44,18 @@ jobs:
         echo "JAR_FILE=${JAR_NAME}" >> $GITHUB_ENV
         echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
+    - name: Save version info
+      run: |
+        echo "${VERSION}" > version.txt
+        echo "Saved version: ${VERSION}"
+
+    - name: Upload version info
+      uses: actions/upload-artifact@v4
+      with:
+        name: version-info
+        path: version.txt
+        retention-days: 1
+
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
