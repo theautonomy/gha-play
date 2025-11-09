@@ -37,7 +37,7 @@ jobs:
     - name: Download built artifact
       uses: actions/download-artifact@v4
       with:
-        name: maven-artifact-${{ inputs.version || '1.0.0-SNAPSHOT' }}
+        name: ${{ needs.call-build.outputs.artifact-name }}
         path: ./downloaded-artifacts
 
     - name: List downloaded files
