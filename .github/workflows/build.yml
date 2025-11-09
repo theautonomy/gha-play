@@ -10,6 +10,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.set-version.outputs.version }}
 
     steps:
     - name: Checkout code
@@ -29,6 +31,7 @@ jobs:
       run: ./mvnw clean package -DskipTests=false
 
     - name: Version JAR file
+      id: set-version
       run: |
         BRANCH="${{ github.ref_name }}"
         POM_VERSION=$(./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout | sed 's/-SNAPSHOT//')
@@ -37,21 +40,11 @@ jobs:
         VERSION="${BRANCH}-${POM_VERSION}-${BUILD_NUMBER}"
         mv target/demo-0.0.1-SNAPSHOT.jar target/${JAR_NAME}
         echo "JAR_FILE=${JAR_NAME}" >> $GITHUB_ENV
-        echo "BRANCH=${BRANCH}" >> version.txt
-        echo "POM_VERSION=${POM_VERSION}" >> version.txt
-        echo "BUILD_NUMBER=${BUILD_NUMBER}" >> version.txt
-        echo "VERSION=${VERSION}" >> version.txt
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.JAR_FILE }}
         path: target/${{ env.JAR_FILE }}
-        retention-days: 30
-
-    - name: Upload version info
-      uses: actions/upload-artifact@v4
-      with:
-        name: version-info
-        path: version.txt
         retention-days: 30

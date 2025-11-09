@@ -16,17 +16,9 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Download version info
-      uses: actions/download-artifact@v4
-      with:
-        name: version-info
-        github-token: ${{ secrets.GITHUB_TOKEN }}
-        run-id: ${{ github.event.workflow_run.id }}
-
-    - name: Read version info
-      id: version
+    - name: Get version from build workflow
       run: |
-        source version.txt
+        VERSION="${{ github.event.workflow_run.outputs.version }}"
         echo "VERSION=${VERSION}" >> $GITHUB_ENV
         echo "Build version: ${VERSION}"
 
