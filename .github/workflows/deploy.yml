@@ -16,6 +16,13 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Debug workflow_run event
+      run: |
+        echo "Workflow run ID: ${{ github.event.workflow_run.id }}"
+        echo "Workflow run conclusion: ${{ github.event.workflow_run.conclusion }}"
+        echo "Workflow run outputs: ${{ toJson(github.event.workflow_run.outputs) }}"
+        echo "Full event: ${{ toJson(github.event.workflow_run) }}"
+
     - name: Get version from build workflow
       run: |
         VERSION="${{ github.event.workflow_run.outputs.version }}"
