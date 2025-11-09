@@ -1,4 +1,4 @@
-name: Call Reusable Build - manual triggered
+name: Use Reusable Workflow - Manual input version number 
 
 on:
   workflow_dispatch:
@@ -12,8 +12,6 @@ on:
         required: false
         type: boolean
         default: false
-  push:
-    branches: [ feature/* ]
 
 jobs:
   call-build:

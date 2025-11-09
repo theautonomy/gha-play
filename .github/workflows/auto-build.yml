@@ -1,4 +1,4 @@
-name: Call Reusable Build - triggered by a push
+name: Use Reusable Workflow - auto generate version number 
 
 on:
   workflow_dispatch:
