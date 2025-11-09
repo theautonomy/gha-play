@@ -1,4 +1,4 @@
-name: Call Reusable Build
+name: Call Reusable Build - manual triggered
 
 on:
   workflow_dispatch:

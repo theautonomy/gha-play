@@ -1,4 +1,4 @@
-name: Auto Build on Push
+name: Call Reusable Build - triggered by a push 
 
 on:
   workflow_dispatch:

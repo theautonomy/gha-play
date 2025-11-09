@@ -1,4 +1,4 @@
-name: Reusable Maven Build
+name: Reusable Maven Build - can only be called by other workflows
 
 on:
   workflow_call:
@@ -57,7 +57,8 @@ jobs:
     - name: Set build info
       id: build-info
       run: |
-        ARTIFACT_NAME="demo-${{ inputs.version }}.jar"
+        ARTIFACT_ID=$(./mvnw help:evaluate -Dexpression=project.artifactId -q -DforceStdout)
+        ARTIFACT_NAME="${ARTIFACT_ID}-${{ inputs.version }}.jar"
         echo "artifact-name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
         echo "status=success" >> $GITHUB_OUTPUT
         echo "Built artifact: ${ARTIFACT_NAME}"
