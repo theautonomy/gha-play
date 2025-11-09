@@ -1,4 +1,4 @@
-name: Call Reusable Build - triggered by a push 
+name: Call Reusable Build - triggered by a push
 
 on:
   workflow_dispatch:
@@ -8,12 +8,42 @@ on:
     # branches: [ master ]
 
 jobs:
+  generate-version:
+    name: Generate Version from POM
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.set-version.outputs.version }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+
+    - name: Make Maven wrapper executable
+      run: chmod +x ./mvnw
+
+    - name: Generate version string
+      id: set-version
+      run: |
+        BRANCH="${{ github.ref_name }}"
+        POM_VERSION=$(./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout)
+        POM_VERSION_NO_SNAPSHOT=$(echo $POM_VERSION | sed 's/-SNAPSHOT//')
+        BUILD_NUMBER="${{ github.run_number }}"
+        VERSION="${BRANCH}-${POM_VERSION_NO_SNAPSHOT}-${BUILD_NUMBER}"
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        echo "Generated version: ${VERSION}"
+
   call-reusable-build:
     name: Build using Reusable Workflow
+    needs: generate-version
     uses: ./.github/workflows/reusable-build.yml
     with:
-      # Derive version from branch name and run number
-      version: ${{ github.ref_name }}-${{ github.run_number }}
+      # Use version from generate-version job
+      version: ${{ needs.generate-version.outputs.version }}
       # Skip tests for feature branches, run tests for develop
       skip-tests: ${{ startsWith(github.ref, 'refs/heads/feature/') }}
 
