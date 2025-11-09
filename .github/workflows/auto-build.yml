@@ -1,0 +1,47 @@
+name: Auto Build on Push
+
+on:
+  workflow_dispatch:
+  # push:
+    # branches: [ master, feature/* ]
+  # pull_request:
+    # branches: [ master ]
+
+jobs:
+  call-reusable-build:
+    name: Build using Reusable Workflow
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      # Derive version from branch name and run number
+      version: ${{ github.ref_name }}-${{ github.run_number }}
+      # Skip tests for feature branches, run tests for develop
+      skip-tests: ${{ startsWith(github.ref, 'refs/heads/feature/') }}
+
+  verify-build:
+    name: Verify Build Results
+    runs-on: ubuntu-latest
+    needs: call-reusable-build
+    steps:
+    - name: Display build information
+      run: |
+        echo "Build completed successfully!"
+        echo "Version: ${{ github.ref_name }}-${{ github.run_number }}"
+        echo "Artifact: ${{ needs.call-reusable-build.outputs.artifact-name }}"
+        echo "Status: ${{ needs.call-reusable-build.outputs.build-status }}"
+
+    - name: Download artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: maven-artifact-${{ github.ref_name }}-${{ github.run_number }}
+        path: ./build-output
+
+    - name: Verify artifact exists
+      run: |
+        echo "Verifying built artifact..."
+        ls -lh ./build-output
+        if [ -f ./build-output/*.jar ]; then
+          echo "✅ JAR file found!"
+        else
+          echo "❌ JAR file not found!"
+          exit 1
+        fi

@@ -1,0 +1,46 @@
+name: Call Reusable Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., 2.0.0-RC1)'
+        required: true
+        type: string
+      skip-tests:
+        description: 'Skip tests'
+        required: false
+        type: boolean
+        default: false
+  push:
+    branches: [ feature/* ]
+
+jobs:
+  call-build:
+    name: Call Reusable Maven Build
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      version: ${{ inputs.version || '1.0.0-SNAPSHOT' }}
+      skip-tests: ${{ inputs.skip-tests || false }}
+
+  use-build-outputs:
+    name: Use Build Outputs
+    runs-on: ubuntu-latest
+    needs: call-build
+    steps:
+    - name: Display build results
+      run: |
+        echo "Build Status: ${{ needs.call-build.outputs.build-status }}"
+        echo "Artifact Name: ${{ needs.call-build.outputs.artifact-name }}"
+        echo "✅ Reusable workflow completed successfully!"
+
+    - name: Download built artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: maven-artifact-${{ inputs.version || '1.0.0-SNAPSHOT' }}
+        path: ./downloaded-artifacts
+
+    - name: List downloaded files
+      run: |
+        echo "Downloaded artifacts:"
+        ls -lh ./downloaded-artifacts

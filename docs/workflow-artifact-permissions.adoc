@@ -1,0 +1,1229 @@
+= GitHub Actions: Workflow Artifact Permissions
+:toc:
+:toclevels: 3
+:sectnums:
+
+== Issue: Cross-Workflow Artifact Download Failures in Private Repositories
+
+=== Problem Description
+
+When using the `workflow_run` trigger to download artifacts from another workflow, you may encounter the following error in private repositories:
+
+[source]
+----
+Error: Unable to download artifact(s): Resource not accessible by integration
+----
+
+=== Root Cause
+
+The behavior differs between public and private repositories due to GitHub's security model:
+
+==== Public Repositories
+
+* The default `GITHUB_TOKEN` has sufficient permissions to access artifacts across workflow runs
+* `actions/download-artifact@v4` can successfully download artifacts from the triggering workflow using the `run-id` parameter
+* Cross-workflow artifact access works out of the box
+
+==== Private Repositories
+
+* The default `GITHUB_TOKEN` has more restricted permissions for security reasons
+* Cross-workflow artifact access requires additional permissions that the default token doesn't have by default
+* The `actions/download-artifact@v4` action cannot access artifacts from different workflow runs
+* This restriction prevents unauthorized access to private repository artifacts
+
+=== Why "Resource not accessible by integration" Error Occurs
+
+The `actions/download-artifact@v4` action uses the `run-id` parameter to download from another workflow run. In private repositories, the default `GITHUB_TOKEN` doesn't have the necessary `actions: read` permission scope to access artifacts from different workflow runs, resulting in the permission error.
+
+== Solutions for Private Repositories
+
+If you need to download artifacts across workflows in a private repository, use one of these solutions:
+
+=== Solution 1: Use Workflow Outputs (Recommended - Currently Implemented)
+
+*This is the best solution for passing simple data like version strings between workflows.*
+
+Instead of using artifacts, use workflow outputs to pass data directly:
+
+*In build.yml:*
+
+[source,yaml]
+----
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.set-version.outputs.version }}
+
+    steps:
+      - name: Version JAR file
+        id: set-version
+        run: |
+          VERSION="1.0.0-SNAPSHOT"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+----
+
+*In deploy.yml:*
+
+[source,yaml]
+----
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+
+    steps:
+      - name: Get version from build workflow
+        run: |
+          VERSION="${{ github.event.workflow_run.outputs.version }}"
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+----
+
+*Advantages:*
+
+* ✅ Works in both public and private repositories
+* ✅ No permission issues
+* ✅ Faster (no artifact upload/download)
+* ✅ Cleaner and simpler
+* ✅ No third-party dependencies
+* ✅ Native GitHub Actions feature
+
+*Limitations:*
+
+* Only suitable for simple data (strings, numbers)
+* Not for large files or binary data
+
+=== Solution 2: Use Third-Party Action
+
+Use `dawidd6/action-download-artifact@v6` instead of the official action:
+
+[source,yaml]
+----
+- name: Download version info
+  uses: dawidd6/action-download-artifact@v6
+  with:
+    name: version-info
+    run_id: ${{ github.event.workflow_run.id }}
+    github_token: ${{ secrets.GITHUB_TOKEN }}
+----
+
+This action uses the GitHub API differently and can properly access artifacts from other workflow runs, even in private repositories.
+
+=== Solution 3: Use Personal Access Token (PAT)
+
+Create a Personal Access Token with `repo` scope and add it as a repository secret:
+
+. Go to GitHub Settings → Developer settings → Personal access tokens
+. Generate a new token with `repo` scope
+. Add it as a repository secret (e.g., `PAT_TOKEN`)
+. Use it in the workflow:
+
+[source,yaml]
+----
+- name: Download version info
+  uses: actions/download-artifact@v4
+  with:
+    name: version-info
+    github-token: ${{ secrets.PAT_TOKEN }}
+    run-id: ${{ github.event.workflow_run.id }}
+----
+
+=== Solution 4: Make Repository Public
+
+If the repository doesn't contain sensitive information, making it public will allow the default `GITHUB_TOKEN` to access artifacts across workflows.
+
+== Understanding Workflow Isolation
+
+=== Can Two Workflows Share Build Output?
+
+*No, workflows cannot directly share build output files.* Each workflow runs on a completely separate, isolated virtual machine (runner).
+
+==== What Workflows CANNOT Share:
+
+* ❌ *Build output files* - Compiled JARs, binaries, etc. in `target/` directory
+* ❌ *Local filesystem* - Each runner has its own isolated filesystem
+* ❌ *Environment variables* - Each workflow has its own environment
+* ❌ *Running processes* or memory state
+
+==== What Workflows CAN Share:
+
+. ✅ *Artifacts* - Files uploaded to GitHub's artifact storage
+** Build workflow uploads JAR → Deploy workflow downloads JAR
+** Requires explicit upload/download actions
+** Can have permission issues in private repositories
+
+. ✅ *Workflow outputs* - Small text data (strings, numbers)
+** Build workflow outputs version → Deploy workflow reads version
+** Lightweight and fast
+** Works in both public and private repositories
+
+. ✅ *Git repository* - Source code
+** Both workflows can checkout the same commit
+** Each workflow must explicitly checkout the code
+
+. ✅ *GitHub API data* - Issues, PRs, releases, etc.
+** Accessible via GitHub API or CLI tools
+
+=== The Trade-off: Download vs. Rebuild
+
+Since workflows run on different machines with isolated filesystems, you have two options:
+
+==== Option A: Download Artifact (Current Approach)
+
+[source,yaml]
+----
+- name: Download JAR artifact
+  uses: actions/download-artifact@v4
+  with:
+    name: demo-${{ env.VERSION }}.jar
+    run-id: ${{ github.event.workflow_run.id }}
+----
+
+*Pros:*
+
+* ✅ No rebuild - uses exact JAR from build workflow
+* ✅ Faster overall (no duplicate compilation)
+* ✅ Ensures deployed artifact matches tested artifact
+
+*Cons:*
+
+* ❌ Requires artifact download (permission issues in private repos)
+* ❌ More complex workflow configuration
+
+==== Option B: Rebuild
+
+[source,yaml]
+----
+- name: Package application
+  run: ./mvnw package -DskipTests=true
+----
+
+*Pros:*
+
+* ✅ No artifact download needed
+* ✅ Simpler workflow
+* ✅ Fast with Maven cache
+
+*Cons:*
+
+* ❌ Duplicates compilation work
+* ❌ Deployed artifact might differ from tested artifact (though unlikely)
+
+Both approaches are valid - choose based on your priorities (simplicity vs. efficiency).
+
+== Our Current Setup
+
+=== Workflows
+
+. *build.yml* - Builds the application and outputs version as a workflow output
+. *deploy.yml* - Automatically deploys after successful build (uses workflow output + artifact download)
+. *deploy-manual.yml* - Manual deployment with user-specified version (independent workflow)
+
+=== Current Implementation
+
+We use a *hybrid approach* combining workflow outputs and artifact downloads:
+
+*build.yml:*
+
+* Defines a job output: `version: ${{ steps.set-version.outputs.version }}`
+* Sets the version using `echo "version=${VERSION}" >> $GITHUB_OUTPUT`
+* Uploads the built JAR as an artifact
+
+*deploy.yml:*
+
+* Retrieves the version using `${{ github.event.workflow_run.outputs.version }}` (workflow output)
+* Downloads the JAR using `actions/download-artifact@v4` (artifact download)
+* Deploys the JAR using `mvn deploy:deploy-file` (no rebuild)
+
+*Status:*
+
+* ✅ Workflow outputs work in both public and private repositories
+* ⚠️ Artifact download works in public repositories; may require `dawidd6/action-download-artifact@v6` for private repos
+
+== Real-World Example: Maven Build and Deploy
+
+This section shows our actual implementation of a Maven-based build and deploy pipeline.
+
+=== Overview
+
+Our pipeline consists of three workflows:
+
+. *build.yml* - Builds and tests the application on every push
+. *deploy.yml* - Automatically deploys to Maven repository after successful build
+. *deploy-manual.yml* - Manually triggered deployment with custom version
+
+=== Build Workflow (build.yml)
+
+*File: `.github/workflows/build.yml`*
+
+[source,yaml]
+----
+name: Build Application
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.set-version.outputs.version }}  # <1>
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: 'maven'  # <2>
+
+    - name: Make Maven wrapper executable
+      run: chmod +x ./mvnw
+
+    - name: Build with Maven
+      run: ./mvnw clean package -DskipTests=false  # <3>
+
+    - name: Version JAR file
+      id: set-version  # <4>
+      run: |
+        BRANCH="${{ github.ref_name }}"
+        POM_VERSION=$(./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout | sed 's/-SNAPSHOT//')
+        BUILD_NUMBER="${{ github.run_number }}"
+        JAR_NAME="demo-${BRANCH}-${POM_VERSION}-${BUILD_NUMBER}.jar"
+        VERSION="${BRANCH}-${POM_VERSION}-${BUILD_NUMBER}"
+        mv target/demo-0.0.1-SNAPSHOT.jar target/${JAR_NAME}
+        echo "JAR_FILE=${JAR_NAME}" >> $GITHUB_ENV
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT  # <5>
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.JAR_FILE }}
+        path: target/${{ env.JAR_FILE }}
+        retention-days: 30
+----
+<1> Job output that exposes the version to other workflows
+<2> Cache Maven dependencies for faster builds
+<3> Run tests during build (DskipTests=false)
+<4> Step ID for referencing this step's outputs
+<5> Set the version output using GITHUB_OUTPUT
+
+=== Automatic Deploy Workflow (deploy.yml)
+
+*File: `.github/workflows/deploy.yml`*
+
+[source,yaml]
+----
+name: Deploy Application
+
+on:
+  workflow_run:
+    workflows: ["Build Application"]  # <1>
+    types:
+      - completed
+    branches: [ master ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}  # <2>
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Get version from build workflow
+      run: |
+        VERSION="${{ github.event.workflow_run.outputs.version }}"  # <3>
+        echo "VERSION=${VERSION}" >> $GITHUB_ENV
+        echo "Build version: ${VERSION}"
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: 'maven'
+
+    - name: Make Maven wrapper executable
+      run: chmod +x ./mvnw
+
+    - name: Set Maven version
+      run: |
+        ./mvnw versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false  # <4>
+
+    - name: Deploy to Maven Repository
+      env:
+        MAVEN_REPO_URL: ${{ secrets.MAVEN_REPO_URL }}  # <5>
+        MAVEN_REPO_USERNAME: ${{ secrets.MAVEN_REPO_USERNAME }}
+        MAVEN_REPO_PASSWORD: ${{ secrets.MAVEN_REPO_PASSWORD }}
+      run: |
+        ./mvnw deploy \
+          -DskipTests=true \  # <6>
+          -DaltDeploymentRepository=remote-repo::default::${MAVEN_REPO_URL} \
+          -s .github/maven-settings.xml
+----
+<1> Trigger when "Build Application" workflow completes
+<2> Only deploy on successful builds from push events (not PRs)
+<3> Retrieve version from build workflow output
+<4> Update pom.xml version before deploying
+<5> Use repository secrets for Maven credentials
+<6> Skip tests (already ran in build workflow)
+
+=== Manual Deploy Workflow (deploy-manual.yml)
+
+*File: `.github/workflows/deploy-manual.yml`*
+
+[source,yaml]
+----
+name: Manual Deploy
+
+on:
+  workflow_dispatch:  # <1>
+    inputs:
+      version:
+        description: 'Version to deploy (e.g., 1.0.0-SNAPSHOT)'
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: 'maven'
+
+    - name: Make Maven wrapper executable
+      run: chmod +x ./mvnw
+
+    - name: Set Maven version
+      run: |
+        ./mvnw versions:set -DnewVersion=${{ inputs.version }} -DgenerateBackupPoms=false  # <2>
+
+    - name: Build application
+      run: ./mvnw clean package -DskipTests=true  # <3>
+
+    - name: Deploy to Maven Repository
+      env:
+        MAVEN_REPO_URL: ${{ secrets.MAVEN_REPO_URL }}
+        MAVEN_REPO_USERNAME: ${{ secrets.MAVEN_REPO_USERNAME }}
+        MAVEN_REPO_PASSWORD: ${{ secrets.MAVEN_REPO_PASSWORD }}
+      run: |
+        ./mvnw deploy \
+          -DskipTests=true \
+          -DaltDeploymentRepository=remote-repo::default::${MAVEN_REPO_URL} \
+          -s .github/maven-settings.xml
+----
+<1> Manual trigger with user inputs
+<2> Use the version provided by user
+<3> Build the application since no artifact is available
+
+=== Key Differences Between Workflows
+
+[cols="1,2,2,2"]
+|===
+|Aspect |build.yml |deploy.yml |deploy-manual.yml
+
+|*Trigger*
+|Push/PR to master
+|After successful build
+|Manual (UI button)
+
+|*Version*
+|Auto-generated from POM + build number
+|From build workflow output
+|User-provided input
+
+|*Tests*
+|✅ Runs tests
+|❌ Skips tests
+|❌ Skips tests
+
+|*Build*
+|✅ Full build
+|✅ Rebuilds for deploy
+|✅ Full build
+
+|*Artifacts*
+|Uploads JAR
+|N/A
+|N/A
+
+|*Purpose*
+|CI - Verify code quality
+|CD - Auto deploy on push
+|CD - Manual release
+|===
+
+=== Workflow Execution Flow
+
+==== Automatic Flow (Push to Master)
+
+[source]
+----
+1. Developer pushes to master branch
+   ↓
+2. build.yml triggers
+   - Checks out code
+   - Runs tests
+   - Builds JAR with version: master-0.0.1-42
+   - Uploads JAR artifact
+   - Outputs version
+   ↓
+3. deploy.yml triggers (on build success)
+   - Retrieves version from build.yml
+   - Checks out code
+   - Sets Maven version
+   - Deploys to Maven repository
+----
+
+==== Manual Flow
+
+[source]
+----
+1. User navigates to Actions → Manual Deploy
+   ↓
+2. User clicks "Run workflow"
+   ↓
+3. User enters version (e.g., "2.0.0-RELEASE")
+   ↓
+4. deploy-manual.yml runs
+   - Checks out code
+   - Sets Maven version to 2.0.0-RELEASE
+   - Builds application
+   - Deploys to Maven repository
+----
+
+=== Configuration Requirements
+
+==== Repository Secrets
+
+Set these secrets in repository settings (Settings → Secrets and variables → Actions):
+
+* `MAVEN_REPO_URL` - Maven repository URL (e.g., `https://nexus.example.com/repository/maven-releases/`)
+* `MAVEN_REPO_USERNAME` - Maven repository username
+* `MAVEN_REPO_PASSWORD` - Maven repository password
+
+==== Maven Settings File
+
+Create `.github/maven-settings.xml`:
+
+[source,xml]
+----
+<settings>
+  <servers>
+    <server>
+      <id>remote-repo</id>
+      <username>${env.MAVEN_REPO_USERNAME}</username>
+      <password>${env.MAVEN_REPO_PASSWORD}</password>
+    </server>
+  </servers>
+</settings>
+----
+
+== Simple Example: Hello World Workflow Chain
+
+This section demonstrates a minimal example of chaining workflows using outputs and artifacts.
+
+=== Hello World Workflow
+
+This workflow generates a greeting and timestamp, then shares them with another workflow.
+
+*File: `.github/workflows/helloworld.yml`*
+
+[source,yaml]
+----
+name: Hello World
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  hello:
+    runs-on: ubuntu-latest
+    outputs:
+      greeting: ${{ steps.say-hello.outputs.greeting }}  # <1>
+      timestamp: ${{ steps.say-hello.outputs.timestamp }}
+
+    steps:
+    - name: Say Hello
+      id: say-hello  # <2>
+      run: |
+        echo "Hello from the Hello World workflow!"
+        GREETING="Hello, World! 👋"
+        TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+        echo "greeting=${GREETING}" >> $GITHUB_OUTPUT  # <3>
+        echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
+        echo "Generated greeting: ${GREETING}"
+        echo "Generated at: ${TIMESTAMP}"
+
+    - name: Create artifact
+      run: |
+        mkdir -p output
+        echo "Hello World!" > output/hello.txt
+        echo "Generated at: $(date)" >> output/hello.txt
+
+    - name: Upload artifact  # <4>
+      uses: actions/upload-artifact@v4
+      with:
+        name: hello-artifact
+        path: output/
+----
+<1> Declare job outputs to share with other workflows
+<2> Step ID for referencing outputs
+<3> Set outputs using GITHUB_OUTPUT
+<4> Upload artifact for other workflows to download
+
+=== Use Hello World Workflow
+
+This workflow consumes the outputs and artifacts from the Hello World workflow.
+
+*File: `.github/workflows/use-helloworld.yml`*
+
+[source,yaml]
+----
+name: Use Hello World
+
+on:
+  workflow_run:
+    workflows: ["Hello World"]  # <1>
+    types:
+      - completed
+    branches: [ main ]
+
+jobs:
+  use-hello:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}  # <2>
+
+    steps:
+    - name: Get outputs from Hello World workflow
+      run: |
+        GREETING="${{ github.event.workflow_run.outputs.greeting }}"  # <3>
+        TIMESTAMP="${{ github.event.workflow_run.outputs.timestamp }}"
+        echo "Received greeting: ${GREETING}"
+        echo "Received timestamp: ${TIMESTAMP}"
+        echo "GREETING=${GREETING}" >> $GITHUB_ENV
+        echo "TIMESTAMP=${TIMESTAMP}" >> $GITHUB_ENV
+
+    - name: Download artifact from Hello World
+      uses: actions/download-artifact@v4  # <4>
+      with:
+        name: hello-artifact
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        run-id: ${{ github.event.workflow_run.id }}
+
+    - name: Display artifact contents
+      run: |
+        echo "Artifact contents:"
+        cat hello.txt
+
+    - name: Use the greeting
+      run: |
+        echo "Processing the greeting: ${{ env.GREETING }}"
+        echo "This workflow was triggered at: ${{ env.TIMESTAMP }}"
+        echo "Now doing something useful with this information..."
+        echo "✅ Successfully used data from Hello World workflow!"
+----
+<1> Trigger when "Hello World" workflow completes
+<2> Only run if Hello World workflow succeeded
+<3> Access outputs from the triggering workflow
+<4> Download artifacts from the triggering workflow
+
+=== How It Works
+
+. *Push to main branch* triggers `helloworld.yml`
+. `helloworld.yml` runs:
+** Generates a greeting and timestamp
+** Sets job outputs
+** Creates and uploads an artifact file
+. When `helloworld.yml` completes successfully, `use-helloworld.yml` triggers automatically
+. `use-helloworld.yml` runs:
+** Retrieves the greeting and timestamp outputs
+** Downloads the artifact file
+** Uses the data for further processing
+
+=== Try It Out
+
+. Copy both workflow files to your `.github/workflows/` directory
+. Push to the `main` branch (or run manually via Actions → Hello World → Run workflow)
+. Watch the Actions tab:
+** First, "Hello World" runs
+** Then, "Use Hello World" automatically triggers
+. Check the logs to see the data being passed between workflows
+
+== Additional Example: Build and Deploy Pipeline
+
+This section demonstrates a simplified pattern for creating build and deploy workflows.
+
+=== Example: Generic Build and Deploy
+
+==== Step 1: Create the Build Workflow
+
+*File: `.github/workflows/build-example.yml`*
+
+[source,yaml]
+----
+name: Build Application
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}  # <1>
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build application
+      run: |
+        echo "Building application..."
+        mkdir -p dist
+        echo "Hello World v1.0.0" > dist/app.txt
+
+    - name: Set version output
+      id: version  # <2>
+      run: echo "version=1.0.0" >> $GITHUB_OUTPUT
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: app-dist
+        path: dist/
+----
+<1> Declare job output that references a step output
+<2> Step ID that produces the output value
+
+==== Step 2: Create the Deploy Workflow
+
+*File: `.github/workflows/deploy.yml`*
+
+[source,yaml]
+----
+name: Deploy Application
+
+on:
+  workflow_run:
+    workflows: ["Build Application"]  # <1>
+    types:
+      - completed
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}  # <2>
+
+    steps:
+    - name: Get version from build
+      run: |
+        VERSION="${{ github.event.workflow_run.outputs.version }}"  # <3>
+        echo "VERSION=${VERSION}" >> $GITHUB_ENV
+        echo "Deploying version: ${VERSION}"
+
+    - name: Download artifact
+      uses: actions/download-artifact@v4  # <4>
+      with:
+        name: app-dist
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        run-id: ${{ github.event.workflow_run.id }}
+
+    - name: Deploy
+      run: |
+        echo "Deploying application version ${{ env.VERSION }}..."
+        ls -la
+        cat app.txt
+----
+<1> Trigger when "Build Application" workflow completes
+<2> Only run if build workflow succeeded
+<3> Access the version output from build workflow
+<4> Download the artifact created by build workflow
+
+=== Key Concepts
+
+==== Workflow Outputs
+
+Workflows can share small pieces of data (strings, numbers) via outputs:
+
+[source,yaml]
+----
+# In the producing workflow
+jobs:
+  job1:
+    outputs:
+      my-value: ${{ steps.step1.outputs.value }}
+    steps:
+      - id: step1
+        run: echo "value=hello" >> $GITHUB_OUTPUT
+
+# In the consuming workflow (triggered by workflow_run)
+jobs:
+  job2:
+    steps:
+      - run: echo "${{ github.event.workflow_run.outputs.my-value }}"
+----
+
+==== Artifacts
+
+Workflows share files via GitHub's artifact storage:
+
+[source,yaml]
+----
+# Upload in build workflow
+- uses: actions/upload-artifact@v4
+  with:
+    name: my-artifact
+    path: ./dist
+
+# Download in deploy workflow
+- uses: actions/download-artifact@v4
+  with:
+    name: my-artifact
+    run-id: ${{ github.event.workflow_run.id }}
+----
+
+==== Workflow Triggers
+
+The `workflow_run` trigger starts a workflow when another workflow completes:
+
+[source,yaml]
+----
+on:
+  workflow_run:
+    workflows: ["Workflow Name"]  # Name of triggering workflow
+    types:
+      - completed                  # Trigger on completion
+    branches: [ main ]             # Only for specific branches
+----
+
+=== Common Patterns
+
+==== Pattern 1: Sequential Workflows
+
+Build → Test → Deploy
+
+[source,yaml]
+----
+# build.yml runs on push
+# test.yml runs on workflow_run: ["Build"]
+# deploy.yml runs on workflow_run: ["Test"]
+----
+
+==== Pattern 2: Parallel + Sequential
+
+Build → (Deploy Dev + Deploy Staging) → Deploy Production
+
+[source,yaml]
+----
+# build.yml runs on push
+# deploy-dev.yml runs on workflow_run: ["Build"]
+# deploy-staging.yml runs on workflow_run: ["Build"]
+# deploy-prod.yml runs on workflow_run: ["Deploy Dev", "Deploy Staging"]
+----
+
+==== Pattern 3: Manual Deployment
+
+Build automatically, deploy manually with version input
+
+[source,yaml]
+----
+# build.yml - automatic on push
+# deploy.yml - manual with workflow_dispatch and version input
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to deploy'
+        required: true
+        type: string
+----
+
+== Reusable Workflows with workflow_call
+
+The `workflow_call` pattern allows you to create reusable workflows that can be called by other workflows using a file path reference. This is different from `workflow_run` which triggers based on workflow name.
+
+=== Key Differences
+
+[cols="1,2,2"]
+|===
+|Feature |workflow_run |workflow_call
+
+|*Trigger Type*
+|Automatic after another workflow completes
+|Explicit call from another workflow
+
+|*Reference By*
+|Workflow name (e.g., "Build Application")
+|File path (e.g., `./.github/workflows/reusable.yml`)
+
+|*Use Case*
+|Chain independent workflows
+|Share common logic across workflows
+
+|*Inputs*
+|Via workflow outputs only
+|Via explicit input parameters
+
+|*Execution*
+|Separate workflow run
+|Part of caller workflow run
+|===
+
+=== Example: Reusable Maven Build Workflow
+
+This example demonstrates creating a reusable Maven build workflow that can be called with different parameters.
+
+==== Reusable Workflow Definition
+
+*File: `.github/workflows/reusable-build.yml`*
+
+[source,yaml]
+----
+name: Reusable Maven Build
+
+on:
+  workflow_call:  # <1>
+    inputs:
+      version:
+        description: 'Version to build'
+        required: true
+        type: string  # <2>
+      skip-tests:
+        description: 'Skip tests during build'
+        required: false
+        type: boolean
+        default: false
+    outputs:  # <3>
+      artifact-name:
+        description: 'Name of the built artifact'
+        value: ${{ jobs.build.outputs.artifact-name }}
+      build-status:
+        description: 'Build completion status'
+        value: ${{ jobs.build.outputs.status }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      artifact-name: ${{ steps.build-info.outputs.artifact-name }}
+      status: ${{ steps.build-info.outputs.status }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: 'maven'
+
+    - name: Make Maven wrapper executable
+      run: chmod +x ./mvnw
+
+    - name: Set Maven version
+      run: |
+        ./mvnw versions:set -DnewVersion=${{ inputs.version }} -DgenerateBackupPoms=false  # <4>
+        echo "Set version to: ${{ inputs.version }}"
+
+    - name: Build with Maven
+      run: |
+        if [ "${{ inputs.skip-tests }}" = "true" ]; then
+          ./mvnw clean package -DskipTests=true
+        else
+          ./mvnw clean package
+        fi
+
+    - name: Set build info
+      id: build-info
+      run: |
+        ARTIFACT_NAME="demo-${{ inputs.version }}.jar"
+        echo "artifact-name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
+        echo "status=success" >> $GITHUB_OUTPUT
+        echo "Built artifact: ${ARTIFACT_NAME}"
+
+    - name: Upload built artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: maven-artifact-${{ inputs.version }}
+        path: target/*.jar
+        retention-days: 5
+----
+<1> `workflow_call` trigger makes this workflow reusable
+<2> Define input parameters with types (string, boolean, number)
+<3> Define outputs that can be used by caller workflows
+<4> Use input parameters with `inputs.parameter-name`
+
+==== Example 1: Manual Trigger with User Inputs
+
+*File: `.github/workflows/call-build.yml`*
+
+[source,yaml]
+----
+name: Call Reusable Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., 2.0.0-RC1)'
+        required: true
+        type: string
+      skip-tests:
+        description: 'Skip tests'
+        required: false
+        type: boolean
+        default: false
+  push:
+    branches: [ feature/* ]
+
+jobs:
+  call-build:
+    name: Call Reusable Maven Build
+    uses: ./.github/workflows/reusable-build.yml  # <1>
+    with:  # <2>
+      version: ${{ inputs.version || '1.0.0-SNAPSHOT' }}
+      skip-tests: ${{ inputs.skip-tests || false }}
+
+  use-build-outputs:
+    name: Use Build Outputs
+    runs-on: ubuntu-latest
+    needs: call-build  # <3>
+    steps:
+    - name: Display build results
+      run: |
+        echo "Build Status: ${{ needs.call-build.outputs.build-status }}"  # <4>
+        echo "Artifact Name: ${{ needs.call-build.outputs.artifact-name }}"
+        echo "✅ Reusable workflow completed successfully!"
+
+    - name: Download built artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: maven-artifact-${{ inputs.version || '1.0.0-SNAPSHOT' }}
+        path: ./downloaded-artifacts
+
+    - name: List downloaded files
+      run: |
+        echo "Downloaded artifacts:"
+        ls -lh ./downloaded-artifacts
+----
+<1> Reference the reusable workflow by file path (not workflow name!)
+<2> Pass input parameters using `with:`
+<3> Use `needs:` to create job dependency
+<4> Access outputs from reusable workflow via `needs.job-name.outputs.output-name`
+
+==== Example 2: Automatic Trigger on Push
+
+This example shows how to call the reusable workflow when triggered by push events, where inputs are derived from the Git context rather than user input.
+
+*File: `.github/workflows/auto-build.yml`*
+
+[source,yaml]
+----
+name: Auto Build on Push
+
+on:
+  push:
+    branches: [ develop, feature/* ]  # <1>
+  pull_request:
+    branches: [ develop ]
+
+jobs:
+  call-reusable-build:
+    name: Build using Reusable Workflow
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      version: ${{ github.ref_name }}-${{ github.run_number }}  # <2>
+      skip-tests: ${{ startsWith(github.ref, 'refs/heads/feature/') }}  # <3>
+
+  verify-build:
+    name: Verify Build Results
+    runs-on: ubuntu-latest
+    needs: call-reusable-build
+    steps:
+    - name: Display build information
+      run: |
+        echo "Build completed successfully!"
+        echo "Version: ${{ github.ref_name }}-${{ github.run_number }}"
+        echo "Artifact: ${{ needs.call-reusable-build.outputs.artifact-name }}"  # <4>
+        echo "Status: ${{ needs.call-reusable-build.outputs.build-status }}"
+
+    - name: Download artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: maven-artifact-${{ github.ref_name }}-${{ github.run_number }}
+        path: ./build-output
+
+    - name: Verify artifact exists
+      run: |
+        echo "Verifying built artifact..."
+        ls -lh ./build-output
+        if [ -f ./build-output/*.jar ]; then
+          echo "✅ JAR file found!"
+        else
+          echo "❌ JAR file not found!"
+          exit 1
+        fi
+----
+<1> Trigger on push to develop or feature branches
+<2> Derive version from branch name and run number (e.g., `develop-42` or `feature/new-api-123`)
+<3> Skip tests for feature branches, run tests for develop branch
+<4> Access outputs from the reusable workflow
+
+*Key Techniques for Push-Triggered Workflows:*
+
+* *Derive version from context*: Use `${{ github.ref_name }}-${{ github.run_number }}` to create version strings
+* *Conditional logic*: Use expressions like `startsWith(github.ref, 'refs/heads/feature/')` to make decisions
+* *Branch-based behavior*: Different branches can have different build behavior (e.g., skip tests on feature branches)
+* *No user input needed*: All parameters are computed from the Git context
+
+=== How It Works
+
+. *Reusable Workflow* (`reusable-build.yml`):
+** Defines `on: workflow_call` to make it callable
+** Declares inputs and outputs in the trigger section
+** Can be called multiple times with different parameters
+
+. *Caller Workflow* (`call-build.yml`):
+** Uses `uses: ./.github/workflows/reusable-build.yml` to call the reusable workflow
+** Passes parameters via `with:`
+** Accesses outputs via `needs.job-name.outputs.output-name`
+
+. *Execution Flow*:
+** When `call-build.yml` runs, it executes `reusable-build.yml` as a job
+** The reusable workflow runs with the provided inputs
+** Outputs are returned to the caller workflow
+** Subsequent jobs can use these outputs
+
+=== Advantages of workflow_call
+
+* ✅ *Code Reuse* - Write build logic once, use in multiple workflows
+* ✅ *Type-Safe Inputs* - Input types are validated (string, boolean, number)
+* ✅ *File Path Reference* - Call by file path, not workflow name
+* ✅ *Same Workflow Run* - Part of caller's workflow run (easier debugging)
+* ✅ *Shared Artifacts* - Artifacts are shared within the same workflow run
+* ✅ *Conditional Logic* - Can pass different parameters based on conditions
+
+=== When to Use workflow_call vs workflow_run
+
+Use *workflow_call* when:
+
+* You want to share common build/deploy logic across multiple workflows
+* You need parameterized, reusable workflow components
+* You want to avoid code duplication
+* You need type-safe input parameters
+
+Use *workflow_run* when:
+
+* You want to chain independent workflows automatically
+* You need workflows to run in separate workflow runs
+* You want to trigger based on another workflow's completion
+* You need to isolate workflow execution contexts
+
+=== Common Use Cases for workflow_call
+
+==== Use Case 1: Multi-Environment Deploy
+
+[source,yaml]
+----
+# reusable-deploy.yml - defines deployment logic
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+
+# deploy-all.yml - calls it for each environment
+jobs:
+  deploy-dev:
+    uses: ./.github/workflows/reusable-deploy.yml
+    with:
+      environment: dev
+      version: ${{ inputs.version }}
+
+  deploy-staging:
+    uses: ./.github/workflows/reusable-deploy.yml
+    with:
+      environment: staging
+      version: ${{ inputs.version }}
+----
+
+==== Use Case 2: Matrix Build with Shared Logic
+
+[source,yaml]
+----
+# reusable-test.yml - defines test logic
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        required: true
+        type: string
+
+# test-matrix.yml - calls with different Java versions
+jobs:
+  test-java-17:
+    uses: ./.github/workflows/reusable-test.yml
+    with:
+      java-version: '17'
+
+  test-java-21:
+    uses: ./.github/workflows/reusable-test.yml
+    with:
+      java-version: '21'
+----
+
+==== Use Case 3: Conditional Deployment
+
+[source,yaml]
+----
+jobs:
+  build:
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      version: ${{ github.ref_name }}
+      skip-tests: false
+
+  deploy:
+    uses: ./.github/workflows/reusable-deploy.yml
+    if: github.ref == 'refs/heads/main'  # Only deploy from main
+    needs: build
+    with:
+      version: ${{ needs.build.outputs.artifact-name }}
+----
+
+== References
+
+* https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#workflow_run[GitHub Actions: workflow_run event]
+* https://docs.github.com/en/actions/security-guides/automatic-token-authentication#permissions-for-the-github_token[GitHub Actions: Permissions]
+* https://docs.github.com/en/actions/using-workflows/reusing-workflows[GitHub Actions: Reusing workflows]
+* https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onworkflow_call[GitHub Actions: workflow_call syntax]
+* https://github.com/dawidd6/action-download-artifact[dawidd6/action-download-artifact]
