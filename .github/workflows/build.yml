@@ -43,9 +43,6 @@ jobs:
         mv target/${ARTIFACT_ID}-${POM_VERSION}.jar target/${JAR_NAME}
         echo "JAR_FILE=${JAR_NAME}" >> $GITHUB_ENV
         echo "version=${VERSION}" >> $GITHUB_OUTPUT
-
-    - name: Save version info
-      run: |
         echo "${VERSION}" > version.txt
         echo "Saved version: ${VERSION}"
 
