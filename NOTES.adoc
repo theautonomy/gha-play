@@ -1,0 +1,42 @@
+== Summary of github action workflows
+
+=== build.yml + deploy.yml
+
+build.yml: 
+        triggered by a push to the repo. 
+        ... (what does it do)
+        trigger deploy.yml
+
+deploy.yml: 
+        trigger by a success run of build.yml
+        ... (what does it do)
+
+=== auto-version-build.yml + reusable-build.yml
+
+This will build, generate version number, and deploy to artifactory repo 
+
+auto-version-build.yml: 
+        currently manually triggered
+        ... (what does it do)
+        call reusable-build.yml
+        ... (what does it do)
+
+=== input-version-build.yml + reusable-build.yml
+
+This will use the inputted version number, build, and deploy to artifactory repo 
+
+auto-version-build.yml: 
+        currently manually triggered and need to input version number
+        ... (what does it do)
+        call reusable-build.yml
+        ... (what does it do)
+
+=== input-version-standalone-build.yml
+
+This will use the inputted version number, build, and deploy to artifactory repo 
+It doesn't use reusable-build.yml
+           
+input-version-standalone build.yml
+        currently manually triggered and need to input version number
+        ... (what does it do)
+
