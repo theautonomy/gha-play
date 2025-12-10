@@ -1,4 +1,4 @@
-name: Build Application
+name: Build Application - normal build
 
 on:
   push:

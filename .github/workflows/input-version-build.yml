@@ -1,0 +1,89 @@
+name: Build Application Using Reusable Workflow - manual input version number 
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., 2.0.0-RC1)'
+        required: true
+        type: string
+      skip-tests:
+        description: 'Skip tests'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  call-reusable-build:
+    name: Call Reusable Maven Build
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      version: ${{ inputs.version || '1.0.0-SNAPSHOT' }}
+      skip-tests: ${{ inputs.skip-tests || false }}
+
+  verify-build:
+    name: Verify Build Results
+    runs-on: ubuntu-latest
+    needs: call-reusable-build
+    steps:
+    - name: Display build results
+      run: |
+        echo "Build Status: ${{ needs.call-reusable-build.outputs.build-status }}"
+        echo "Artifact Name: ${{ needs.call-reusable-build.outputs.artifact-name }}"
+        echo "✅ Reusable workflow completed successfully!"
+
+    - name: Download built artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ needs.call-reusable-build.outputs.artifact-name }}
+        path: ./downloaded-artifacts
+
+    - name: List downloaded files
+      run: |
+        echo "Downloaded artifacts:"
+        ls -lh ./downloaded-artifacts
+
+  deploy:
+    name: Deploy Artifact
+    runs-on: ubuntu-latest
+    needs: call-reusable-build
+    if: ${{ needs.call-reusable-build.outputs.build-status == 'success' }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download built artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ needs.call-reusable-build.outputs.artifact-name }}
+        path: ./downloaded-artifact
+
+    - name: Get version from inputs
+      run: |
+        echo "VERSION=${{ inputs.version || '1.0.0-SNAPSHOT' }}" >> $GITHUB_ENV
+        echo "Using version: ${{ inputs.version || '1.0.0-SNAPSHOT' }}"
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: 'maven'
+
+    - name: Make Maven wrapper executable
+      run: chmod +x ./mvnw
+
+    - name: Set Maven version
+      run: |
+        ./mvnw versions:set -DnewVersion=${{ env.VERSION }} -DgenerateBackupPoms=false
+
+    - name: Deploy to Maven Repository
+      env:
+        MAVEN_REPO_URL: ${{ secrets.MAVEN_REPO_URL }}
+        MAVEN_REPO_USERNAME: ${{ secrets.MAVEN_REPO_USERNAME }}
+        MAVEN_REPO_PASSWORD: ${{ secrets.MAVEN_REPO_PASSWORD }}
+      run: |
+        ./mvnw deploy \
+          -DskipTests=true \
+          -DaltDeploymentRepository=remote-repo::default::${MAVEN_REPO_URL} \
+          -s .github/maven-settings.xml

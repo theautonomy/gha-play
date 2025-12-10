@@ -1,4 +1,4 @@
-name: Deploy Artifact - manual trigger 
+name: Deploy Artifact - manual trigger and need to input build number to deploy 
 
 on:
   workflow_dispatch:

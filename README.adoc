@@ -1,0 +1,100 @@
+= GitHub Actions Workflows
+
+This repository contains several GitHub Actions workflows to build, version, and deploy a simple Maven Java application. Below is a short summary of each workflow, how it is triggered, and important inputs/secrets.
+
+**Workflows**
+- **`build.yml` - Build Application:** : Builds the project on push, PR or manually.
+  - **Triggers:** `push` to `master`, `pull_request` targeting `master`, and `workflow_dispatch` (manual).
+  - **What it does:** Checks out the code, sets up JDK 21, runs `./mvnw clean package`, and generates a versioned JAR name that includes branch and run number. It uploads two artifacts:
+    - `version-info` (text file containing the generated version)
+    - the versioned JAR (retention 30 days)
+  - **Outputs:** job output `version` and an artifact `version-info` used by the `deploy.yml` workflow.
+
+- **`reusable-build.yml` - Reusable Maven Build:** : A reusable workflow that can be called by other workflows.
+  - **Triggers:** `workflow_call` (invoked by other workflows).
+  - **Inputs:** `version` (string, required), `skip-tests` (boolean, default: `false`).
+  - **What it does:** Sets the POM version to the supplied `version`, runs the Maven build (optionally skipping tests), uploads the built JAR as an artifact, and publishes outputs `artifact-name` and `build-status` for callers to consume.
+
+**`auto-version-build.yml` - Build Using Reusable Workflow (auto version):** : Automatically generates a version string, calls the reusable build, and (optionally) deploys.
+  - **Triggers:** `workflow_dispatch` (manual); commented sections show potential `push`/`pull_request` triggers.
+  - **What it does:** Reads `project.version` from the POM, composes a version that includes branch and run number, then calls `reusable-build.yml` with that version. It downloads and verifies the resulting artifact. This workflow now includes an in-workflow `deploy` job which sets the POM version and runs `./mvnw deploy` to publish the artifact to the configured Maven repository.
+  - **Secrets required (for deploy):** `MAVEN_REPO_URL`, `MAVEN_REPO_USERNAME`, `MAVEN_REPO_PASSWORD`.
+
+**`input-version-build.yml` - Build Using Reusable Workflow (manual):** : Manually call the reusable build with inputs — now includes deploy.
+  - **Triggers:** `workflow_dispatch` (manual input for `version` and `skip-tests`).
+  - **What it does:** Calls `reusable-build.yml` with user-provided `version` and `skip-tests`, then downloads and lists the produced artifact. This workflow now also contains a `deploy` job that uses the provided `version` to set the POM and run `./mvnw deploy` to publish the artifact.
+  - **Secrets required (for deploy):** `MAVEN_REPO_URL`, `MAVEN_REPO_USERNAME`, `MAVEN_REPO_PASSWORD`.
+
+- **`deploy.yml` - Deploy Artifact (automatic):** : Deploys artifacts to a Maven repository when `build.yml` completes successfully.
+  - **Triggers:** `workflow_run` for the workflow named "Build Application" when it completes on `master`.
+  - **What it does:** Downloads the `version-info` artifact from the triggering `build.yml` run, sets project version, builds (or adjusts) the package, and runs `./mvnw deploy` to an external Maven repository.
+  - **Secrets required:** `MAVEN_REPO_URL`, `MAVEN_REPO_USERNAME`, `MAVEN_REPO_PASSWORD` (configured in the repository Settings → Secrets).
+
+- **`deploy-manual.yml` - Deploy Artifact (manual):** : Manually deploy a specific version.
+  - **Triggers:** `workflow_dispatch` (requires `version` input).
+  - **What it does:** Sets the POM version to the provided `version`, builds (skipping tests), and runs `./mvnw deploy` using the configured Maven repository secrets.
+  - **Secrets required:** `MAVEN_REPO_URL`, `MAVEN_REPO_USERNAME`, `MAVEN_REPO_PASSWORD`.
+
+**Common Notes & Usage**
+- **Java & Maven:** All workflows use `actions/setup-java@v4` with Java 21 and use the repository's Maven wrapper `./mvnw` (made executable in each workflow).
+- **Artifacts:** Build artifacts are uploaded via `actions/upload-artifact@v4`. The reusable workflow returns the artifact name and status as outputs for downstream jobs.
+- **Reusable workflow usage:** Other workflows call the reusable build with syntax like:
+
+```
+uses: ./.github/workflows/reusable-build.yml
+with:
+  version: '1.2.3'
+  skip-tests: false
+```
+
+- **Deploy secrets:** Add `MAVEN_REPO_URL`, `MAVEN_REPO_USERNAME`, and `MAVEN_REPO_PASSWORD` in the repository's Secrets to allow deployment to a Maven repository.
+- **Manual runs:** To trigger manual workflows, go to the repository's Actions tab, select the workflow (for example `Build Application` or `Deploy Artifact - manual trigger`) and click "Run workflow". You can also trigger `workflow_dispatch` workflows using the `gh` CLI, for example:
+
+```
+gh workflow run build.yml --field version="1.0.0"
+gh workflow run deploy-manual.yml --field version="1.0.0"
+```
+
+**Where to look in the repo**
+- Workflow files: `/.github/workflows/*.yml`
+- Maven settings used for deploy: `/.github/maven-settings.xml` (credentials are supplied through secrets referenced by the workflows)
+
+**Deploy Paths & Duplicate Deploys**
+- **Two deploy options:** This repository now supports two independent deploy paths that both publish to your Maven repository:
+  - `build.yml` → `deploy.yml`: the original two-step path where `build.yml` runs on `push`/`PR`/manual and `deploy.yml` listens for completed runs of the workflow named "Build Application" and performs the deploy.
+  - `auto-version-build.yml` and `input-version-build.yml`: both workflows now include an in-workflow `deploy` job that will run `mvn deploy` after a successful reusable build.
+- **Potential duplicate deploys:** If both paths are executed for the same commit (for example a `push` triggers `build.yml`→`deploy.yml` and someone also runs `auto-version-build` for the same version/commit), you may attempt to publish the same artifact twice. Depending on your Maven repository policy, repeated publishes for the same coordinates can fail (non-snapshots) or be rejected.
+- **Recommended safeguards:** choose one of the following to avoid accidental duplicate publishes:
+  - **Guard on branch or input:** Add an `if:` condition to the in-workflow `deploy` job so it only runs for `master` or when a `deploy: true` input is provided. Example:
+
+```
+if: ${{ needs.call-reusable-build.outputs.build-status == 'success' && github.ref_name == 'master' }}
+```
+
+or (manual toggle):
+
+```
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        required: true
+      deploy:
+        description: 'Set to true to perform deploy'
+        required: false
+        type: boolean
+
+# then on the deploy job
+if: ${{ inputs.deploy == true && needs.call-reusable-build.outputs.build-status == 'success' }}
+```
+
+  - **Canonical deploy workflow:** Prefer the `build.yml` → `deploy.yml` separation for automated pushes and keep the in-workflow deploys enabled only for manual runs where an operator explicitly asked to deploy.
+
+I can add one of these safeguards to the `auto-version-build.yml` and `input-version-build.yml` deploy jobs now if you want — tell me whether you prefer a branch-only guard (`master`) or a manual `deploy` boolean input.
+
+If you want, I can also:
+- add examples for invoking the reusable workflow from an external repository,
+- or add a small `CONTRIBUTING.adoc` section describing how contributors should run or skip tests during CI runs.
+
+--
+Generated by repository workflows documentation generator.
