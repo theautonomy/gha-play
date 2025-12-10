@@ -2,7 +2,7 @@ name: Deploy Artifact - triggered by build.yml success run
 
 on:
   workflow_run:
-    workflows: ["Build Application Using Reusable Workflow - auto generate version number"]
+    workflows: ["Build Application - normal build"]
     types:
       - completed
     branches: [ master ]
