@@ -33,10 +33,27 @@ auto-version-build.yml:
 
 === input-version-standalone-build.yml
 
-This will use the inputted version number, build, and deploy to artifactory repo 
+This will use the inputted version number, build, and deploy to artifactory repo
 It doesn't use reusable-build.yml
-           
+
 input-version-standalone build.yml
         currently manually triggered and need to input version number
         ... (what does it do)
+
+== Known Issues / Notes
+
+=== Double build in reusable workflow chains
+
+The workflows that use `reusable-build.yml` (e.g., `auto-version-build.yml`, `input-version-build.yml`)
+build the artifact twice:
+
+1. First build: `reusable-build.yml` runs `mvnw clean package`
+2. Second build: The deploy job runs `mvnw deploy` which rebuilds from source
+
+The downloaded artifact from the reusable workflow is not actually used in the deploy step.
+This is acceptable for a learning project but would be inefficient in production.
+
+Possible fixes:
+- Use `deploy:deploy-file` to deploy the already-built JAR
+- Remove the reusable workflow and build once in the deploy job (like `input-version-standalone-build.yml`)
 
